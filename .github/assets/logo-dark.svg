@@ -1,0 +1,17 @@
+<svg width="232" height="64" viewBox="0 0 232 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <svg x="6" y="9" width="46" height="46" viewBox="0 0 24 24" fill="none">
+    <path d="M12 5 5 18.5 19 18.5Z" stroke="#fafafa" stroke-width="1.6" stroke-linejoin="round" opacity="0.35"/>
+    <g stroke="#fafafa" stroke-width="1.6" stroke-linecap="round" opacity="0.9">
+      <path d="M12 12.5V5"/>
+      <path d="M12 12.5 5 18.5"/>
+      <path d="M12 12.5 19 18.5"/>
+    </g>
+    <g fill="#fafafa" opacity="0.9">
+      <circle cx="12" cy="5" r="2"/>
+      <circle cx="5" cy="18.5" r="2"/>
+      <circle cx="19" cy="18.5" r="2"/>
+    </g>
+    <circle cx="12" cy="12.5" r="2.7" fill="#fafafa"/>
+  </svg>
+  <text x="60" y="41" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="29" font-weight="700" letter-spacing="-0.6" fill="#fafafa">SpanoAI</text>
+</svg>

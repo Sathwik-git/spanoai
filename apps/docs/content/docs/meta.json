@@ -1,0 +1,13 @@
+{
+  "title": "Documentation",
+  "root": true,
+  "pages": [
+    "index",
+    "quickstart",
+    "authentication",
+    "concepts",
+    "cookbook",
+    "integrations",
+    "api"
+  ]
+}

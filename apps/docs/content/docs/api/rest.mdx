@@ -1,0 +1,141 @@
+---
+title: REST & WebSocket API
+description: The HTTP endpoints and live stream behind the SDK.
+---
+
+The SDK is a wrapper over this HTTP + WebSocket API. You can call it directly from any
+language.
+
+## Conventions
+
+- **Base URL** — `http://localhost:8000` in dev.
+- **Auth** — either an API key (`X-SpanoAI-Key: spanoai_sk_…`, for agents/SDK/MCP) or a
+  dashboard session token (`Authorization: Bearer …`, for a logged-in user) on every
+  request except `/health` and `/auth/signup` · `/auth/login`.
+- **Identity** — `X-SpanoAI-Agent: <agentId>` names the calling agent.
+- **Bodies** — JSON in, JSON out. Errors are `{ error, message, requestId }` with the
+  appropriate HTTP status.
+
+## Accounts & keys
+
+A user signs up (provisioning a tenant), logs in for a session token, then mints API
+keys for their agents. Key management is gated to the session token — an API key cannot
+create more keys.
+
+<TypeTable
+  type={{
+    "POST /auth/signup": { description: "Create an account + tenant. Body: { email, password, orgName? }.", type: "201 → { token, user, tenantId }" },
+    "POST /auth/login": { description: "Exchange credentials for a session token. Body: { email, password }.", type: "→ { token, user, tenantId }" },
+    "GET /auth/me": { description: "The logged-in user (Bearer token).", type: "→ { user, tenantId }" },
+    "POST /auth/logout": { description: "Revoke the current session token (Bearer).", type: "→ { ok }" },
+    "GET /keys": { description: "List the tenant's API keys (Bearer token).", type: "→ KeySummary[]" },
+    "POST /keys": { description: "Mint a key. Body: { name, scopes?, namespaces? }. Full key returned ONCE.", type: "201 → { id, key, scopes }" },
+    "DELETE /keys/:id": { description: "Revoke a key (Bearer token).", type: "→ { revoked }" },
+  }}
+/>
+
+```bash
+curl -X POST http://localhost:8000/context/run-1/shared/plan \
+  -H "X-SpanoAI-Key: $KEY" -H "X-SpanoAI-Agent: planner" \
+  -H "Content-Type: application/json" \
+  -d '{ "value": { "type": "json", "data": { "steps": 3 } } }'
+```
+
+## Context
+
+<TypeTable
+  type={{
+    "POST /context/:session/:ns/:key": { description: "Write a value. Body: { value, expectedVersion?, operationId? }.", type: "→ Entry" },
+    "GET /context/:session/:ns/:key": { description: "Read an entry. 404 if missing.", type: "→ Entry" },
+    "GET /context/:session/:ns/:key/history": { description: "All versions of the entry.", type: "→ Entry[]" },
+    "GET /context/:session/:ns/:key/await": { description: "Long-poll until the key appears. ?timeoutMs=. 408 on timeout.", type: "→ Entry" },
+    "POST /context/:session/search": { description: "Semantic search. Body: { query, topK? }.", type: "→ Hit[]" },
+    "GET /context/:session": { description: "List entries. ?namespace= to filter.", type: "→ Entry[]" },
+  }}
+/>
+
+## Messages
+
+<TypeTable
+  type={{
+    "POST /messages": { description: "Dispatch one message. Body: { sessionId, toAgent, intent, payload, … }.", type: "201 → AgentMessage" },
+    "POST /messages/broadcast": { description: "Fan-out. Body: { sessionId, toAgents[], intent, payload }.", type: "201 → AgentMessage[]" },
+    "POST /messages/request": { description: "Dispatch + await reply. Body: { …, timeoutMs }.", type: "→ { message, reply }" },
+    "POST /messages/:agentId/claim": { description: "Claim pending messages. ?sessionId= &count=.", type: "→ AgentMessage[]" },
+    "POST /messages/:id/ack": { description: "Ack a claimed message. ?sessionId=.", type: "→ { acked }" },
+    "POST /messages/:id/reply": { description: "Reply to a message. ?sessionId=. Body: { payload, … }.", type: "→ AgentMessage" },
+    "GET /messages/:id/await-reply": { description: "Long-poll for the reply. ?sessionId= &timeoutMs=.", type: "→ AgentMessage | null" },
+    "GET /messages/dlq": { description: "List dead-lettered messages. ?sessionId=.", type: "→ DlqEntry[]" },
+    "POST /messages/dlq/:streamId/replay": { description: "Replay a dead-lettered message. ?sessionId=.", type: "→ AgentMessage" },
+  }}
+/>
+
+## Sessions & audit
+
+<TypeTable
+  type={{
+    "POST /sessions": { description: "Create a session. Body: { sessionId?, ttlSeconds?, metadata? }.", type: "201 → Session" },
+    "GET /sessions/:id": { description: "Fetch a session.", type: "→ Session" },
+    "GET /sessions": { description: "List sessions for the tenant.", type: "→ Session[]" },
+    "POST /sessions/:id/join": { description: "Join a session. Body: { agentId? }.", type: "→ Session" },
+    "POST /sessions/:id/leave": { description: "Leave a session. Body: { agentId? }.", type: "→ { left }" },
+    "GET /audit/:session": { description: "Query the audit trail for a session.", type: "→ AuditEntry[]" },
+  }}
+/>
+
+## Artifacts
+
+<TypeTable
+  type={{
+    "POST /artifacts/:session": { description: "Begin an upload. Returns a presigned PUT URL.", type: "→ { artifactId, uploadUrl }" },
+    "POST /artifacts/:session/:id/complete": { description: "Verify size + SHA-256 and mark available.", type: "→ Artifact" },
+    "GET /artifacts/:session/:id": { description: "Artifact metadata.", type: "→ Artifact" },
+    "GET /artifacts/:session/:id/download": { description: "Presigned, short-lived GET URL.", type: "→ { downloadUrl }" },
+  }}
+/>
+
+<Callout type="info">
+  Artifact bytes never pass through the API — clients PUT/GET object storage directly
+  with the presigned URLs. The SDK's `upload`/`download` orchestrate this for you.
+</Callout>
+
+## WebSocket stream
+
+Real-time events (new messages, context changes) are pushed over a WebSocket.
+
+<Steps>
+
+<Step>
+### Mint a ticket
+```bash
+curl -X POST http://localhost:8000/stream-ticket \
+  -H "X-SpanoAI-Key: $KEY" -H "X-SpanoAI-Agent: planner" \
+  -H "Content-Type: application/json" -d '{ "sessionId": "run-1" }'
+# → { "ticket": "…", "expiresIn": 30 }   (single-use, ~30s TTL)
+```
+</Step>
+
+<Step>
+### Connect
+```text
+ws://localhost:8000/stream/run-1?ticket=<ticket>
+```
+The stream supports gap recovery — on reconnect you can resume from the last event id
+so nothing is missed across a blip.
+</Step>
+
+</Steps>
+
+## Operational
+
+<TypeTable
+  type={{
+    "GET /health": { description: "Liveness check (public, no auth).", type: "→ 200" },
+    "GET /metrics": { description: "Prometheus metrics.", type: "→ text/plain" },
+  }}
+/>
+
+<Callout type="warn">
+  When Redis is unreachable, commands fast-fail with a `503 SERVICE_UNAVAILABLE`
+  (bounded by `SPANOAI_REDIS_COMMAND_TIMEOUT_MS`) rather than hanging the request.
+</Callout>

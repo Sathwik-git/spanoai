@@ -1,0 +1,54 @@
+---
+title: Overview
+description: Runnable example apps that exercise the full product — each one self-asserts that it works.
+---
+
+This cookbook collects four small applications, each a real client of SpanoAI (the SDK
+over HTTP) that demonstrates a different coordination pattern and **asserts its own
+behaviour**. They live in the
+[`examples/`](https://github.com/Sathwik-git/spanoai/tree/main/examples) folder and double
+as an integration smoke test.
+
+<Cards>
+  <Card title="Parallel Research" href="/docs/cookbook/parallel-research" description="Fan-out + accumulate + barrier. Five researchers append to one list concurrently; no finding is lost." />
+  <Card title="Coding Team" href="/docs/cookbook/coding-team" description="Blocking handoff with awaitKey, then correlated request/reply for a review verdict." />
+  <Card title="Broadcast Fan-out" href="/docs/cookbook/broadcast-fanout" description="One send → many durable inboxes, then collect every reply by message id." />
+  <Card title="Artifact Share" href="/docs/cookbook/artifact-share" description="Upload a file, hand the reference over a message, download byte-for-byte." />
+</Cards>
+
+## Running the examples
+
+<Steps>
+
+<Step>
+### Start the backends and server
+
+```bash
+docker compose up -d
+cd server && bun run db:migrate && bun run src/index.ts
+```
+</Step>
+
+<Step>
+### Run them all
+
+```bash
+bun run examples/run-all.ts
+```
+
+…or one at a time:
+
+```bash
+bun run examples/broadcast-fanout/index.ts
+```
+</Step>
+
+</Steps>
+
+Each example mints its own tenant + API key on startup and tears it down at the end, so
+runs are isolated and repeatable. They print `✅`/`❌` per assertion and exit non-zero
+on failure.
+
+<Callout type="info">
+  Point the examples at a remote server with `SPANOAI_API_URL=https://…`.
+</Callout>

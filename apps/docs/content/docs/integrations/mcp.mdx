@@ -1,0 +1,92 @@
+---
+title: MCP server
+description: Expose SpanoAI's context store and message bus to any MCP client — Claude Desktop, Cursor, the Claude Agent SDK, Google ADK.
+---
+
+`@spanoai/mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server that turns every SpanoAI operation into an MCP tool. Any MCP client picks
+them up with no glue code.
+
+```bash
+SPANOAI_API_KEY=spanoai_sk_... SPANOAI_SESSION=run-1 npx @spanoai/mcp
+```
+
+<Callout type="info">
+  Need a key? Create one from the dashboard (**API Keys** page) or via the API — see
+  [Authentication → Creating a key](/docs/authentication#creating-a-key).
+</Callout>
+
+## Configuration
+
+| Env | Required | Default | Meaning |
+|---|---|---|---|
+| `SPANOAI_API_KEY` | yes | — | A scoped SpanoAI API key. |
+| `SPANOAI_API_URL` | no | `http://localhost:8000` | Engine base URL. |
+| `SPANOAI_SESSION` | no | — | Default session id (tools may override per call). |
+| `SPANOAI_AGENT` | no | `spano-mcp` | Default agent identity (tools may override per call). |
+| `SPANOAI_MCP_MAX_INLINE_BYTES` | no | `1048576` | Max bytes carried inline by upload/download. |
+
+## Tools
+
+| Tool | Args | Maps to |
+|---|---|---|
+| `spano_write` | `namespace, key, value, expectedVersion?` | `context.write` |
+| `spano_read` | `namespace, key` | `context.read` |
+| `spano_append` | `namespace, key, items[], maxItems?` | `context.append` |
+| `spano_increment` | `namespace, key, by?` | `context.increment` |
+| `spano_await` | `namespace, key, timeoutMs?` | `context.awaitKey` |
+| `spano_search` | `query, topK?` | `context.search` |
+| `spano_send` | `toAgent, intent, text?, data?, priority?` | `bus.dispatch` |
+| `spano_broadcast` | `toAgents[], intent, text?, data?` | `bus.broadcast` |
+| `spano_claim` | `count?` | `bus.claim` |
+| `spano_reply` | `messageId, text?, data?` | `bus.reply` |
+| `spano_request` | `toAgent, intent, text?, data?, timeoutMs?` | `bus.request` |
+| `spano_await_reply` | `messageId, timeoutMs?` | `bus.awaitReply` |
+| `spano_upload` | `name, mimeType, base64` | `artifacts.upload` |
+| `spano_download` | `artifactId` | `artifacts.download` |
+
+Every tool accepts optional `session` and `agent` arguments overriding the
+environment defaults. Errors (including a missing scope → 403) come back as
+`isError` results, never thrown, so the agent loop keeps going.
+
+## Claude Desktop / Cursor
+
+```json
+{
+  "mcpServers": {
+    "spanoai": {
+      "command": "npx",
+      "args": ["-y", "@spanoai/mcp"],
+      "env": {
+        "SPANOAI_API_KEY": "spanoai_sk_...",
+        "SPANOAI_SESSION": "run-1",
+        "SPANOAI_AGENT": "desktop"
+      }
+    }
+  }
+}
+```
+
+## Google ADK (`MCPToolset`)
+
+```python
+from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, StdioServerParameters
+
+tools = MCPToolset(connection_params=StdioServerParameters(
+    command="npx", args=["-y", "@spanoai/mcp"],
+    env={"SPANOAI_API_KEY": "spanoai_sk_...", "SPANOAI_SESSION": "run-1"},
+))
+```
+
+## In-process (Claude Agent SDK / custom)
+
+```ts
+import { createSpanoMcpServer } from "@spanoai/mcp";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+
+const server = createSpanoMcpServer({ apiKey: "spanoai_sk_...", session: "run-1", agent: "planner" });
+await server.connect(new StdioServerTransport());
+```
+
+A streamable-HTTP server is also available for hosted/remote MCP via
+`startHttpServer({ port })` from `@spanoai/mcp/http`.

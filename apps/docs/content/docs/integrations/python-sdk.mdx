@@ -1,0 +1,89 @@
+---
+title: Python SDK
+description: The spanoai Python client — sync and async, mirroring the TypeScript SDK 1:1.
+---
+
+The Python SDK is a thin, typed wrapper over the HTTP + WebSocket API, with
+retries and idempotent operations built in. It mirrors the TypeScript SDK 1:1
+(snake_case), and ships both sync (`SpanoAI`) and async (`AsyncSpanoAI`) clients.
+
+```bash
+pip install spanoai
+```
+
+## Client
+
+```python
+from spanoai import SpanoAI
+
+spano = SpanoAI(
+    api_key="sk_...",
+    base_url="http://localhost:8000",  # default
+    agent="planner",                    # identity sent on every request
+)
+```
+
+Everything is reachable as `spano.context.*`, `spano.bus.*`, `spano.sessions.*`,
+or `spano.artifacts.*`.
+
+## context
+
+```python
+spano.context.write("run-1", "planner", "goal", {"task": "ship it"})
+entry = spano.context.read("run-1", "planner", "goal")   # None on a miss
+spano.context.append("run-1", "log", "events", ["started"])
+spano.context.increment("run-1", "stats", "votes", 1)
+entry = spano.context.await_key("run-1", "coder", "patch", timeout_ms=5000)
+hits = spano.context.search("run-1", "revenue", top_k=5)
+```
+
+## bus
+
+```python
+# fire-and-forget
+spano.bus.dispatch("run-1", "worker", "do_task", {"text": "process this"})
+
+# claim + reply (the consumer side)
+inbox = spano.bus.claim("run-1", "worker")
+spano.bus.reply("run-1", inbox[0]["id"], {"data": {"ok": True}})
+
+# request/reply — send and block for the answer
+res = spano.bus.request("run-1", "reviewer", "review", {"data": {"pr": 1}}, timeout_ms=5000)
+print(res["reply"]["payload"]["data"])
+
+# fan-out
+spano.bus.broadcast("run-1", ["w1", "w2", "w3"], "fanout", {"data": {"job": "x"}})
+```
+
+## sessions & artifacts
+
+```python
+spano.sessions.create("run-1")
+spano.sessions.join("run-1", "agent-2")
+
+art = spano.artifacts.upload("run-1", "report.pdf", "application/pdf", pdf_bytes)
+data = spano.artifacts.download("run-1", art["id"])   # byte-exact
+```
+
+## Async
+
+```python
+import asyncio
+from spanoai import AsyncSpanoAI
+
+async def main():
+    async with AsyncSpanoAI(api_key="sk_...", agent="planner") as spano:
+        await spano.context.write("run-1", "planner", "goal", "ship it")
+        async for event in spano.stream("run-1"):
+            print(event["event"])
+            break
+
+asyncio.run(main())
+```
+
+## Errors & retries
+
+`read()` returns `None` on a miss. Any other non-2xx response raises
+`SpanoAIError(status, code, request_id)`. Mutating calls auto-generate an
+`operationId` and reuse it across retries (5xx / 429 / network), so a retry
+replays idempotently rather than double-applying.

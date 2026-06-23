@@ -1,0 +1,117 @@
+---
+title: Message Bus
+description: Durable agent-to-agent messaging — claim/ack, request/reply, broadcast, priorities, and a dead-letter queue.
+---
+
+The Message Bus moves work between agents. Unlike a fire-and-forget pub/sub, messages
+are **durable** (Redis Streams), delivered **at least once**, and survive a consumer
+crash. Each recipient agent has its own inbox per session.
+
+## Dispatch & claim
+
+The sender dispatches a message to a recipient; the recipient claims it from its inbox,
+processes it, and acks.
+
+```ts
+// sender
+await client.bus.dispatch(session, "researcher", "find_revenue", { data: { ticker: "ACME" } });
+
+// recipient
+const inbox = await researcher.bus.claim(session, "researcher", 10); // up to 10
+for (const msg of inbox) {
+  // … do work …
+  await researcher.bus.ack(session, msg.id);
+}
+```
+
+A claimed-but-unacked message is redelivered after an idle timeout (the reclaim
+sweeper), so a crashed consumer doesn't lose work.
+
+<Callout type="info">
+  Delivery is **at least once**. Every message carries a stable `operationId`; use it
+  to dedupe if your handler isn't naturally idempotent.
+</Callout>
+
+## Request / reply
+
+For synchronous-feeling coordination, `request` dispatches a message and blocks for a
+correlated reply. The responder uses `reply`, which routes back to the asker by the
+original message id — no inbox draining required.
+
+```ts
+// asker — blocks up to timeoutMs
+const { message, reply } = await client.bus.request(
+  session, "reviewer", "review_request", { data: { pr: 1234 } }, { timeoutMs: 5000 },
+);
+
+// responder
+const inbox = await reviewer.bus.claim(session, "reviewer");
+await reviewer.bus.reply(session, inbox[0].id, { data: { approved: true } });
+```
+
+If no reply arrives before the timeout, `reply` is `null`.
+
+## Broadcast fan-out
+
+Send the **same** message to many recipients in one call. Each gets its own durable
+copy in its own inbox, and all copies share one `traceId` so you can correlate the
+fan-out.
+
+```ts
+const sent = await client.bus.broadcast(
+  session, ["worker-1", "worker-2", "worker-3"], "process_chunk", { data: { chunk } },
+);
+// sent.length === 3, all share sent[0].traceId
+```
+
+To collect replies after a broadcast, await each sent message id:
+
+```ts
+const replies = await Promise.all(
+  sent.map((m) => client.bus.awaitReply(session, m.id, { timeoutMs: 4000 })),
+);
+```
+
+<Callout type="info">
+  `awaitReply` is the standalone form of the wait built into `request` — use it when
+  you sent the message yourself (e.g. a broadcast) and now want the response.
+</Callout>
+
+## Priorities
+
+Messages carry a priority (0–4). Each agent's inbox is drained highest-priority-first,
+so an urgent message jumps ahead of a backlog of low-priority ones.
+
+```ts
+await client.bus.dispatch(session, "worker", "halt", { text: "stop now" }, { priority: 0 });
+```
+
+## Dead-letter queue
+
+A message that exceeds its retry budget is moved to the session's **DLQ** instead of
+being lost. You can inspect and replay it:
+
+```ts
+const dead = await client.bus.listDlq(session);
+await client.bus.replayDlq(session, dead[0].streamId); // re-inject for delivery
+```
+
+## Live stream
+
+To react to messages and context changes in real time (instead of claiming on a loop),
+subscribe to the WebSocket [stream](/docs/api/rest#websocket-stream). The SDK handles
+ticket auth and reconnection with gap recovery.
+
+## At a glance
+
+<TypeTable
+  type={{
+    dispatch: { description: "Send one durable message to one agent.", type: "→ AgentMessage" },
+    broadcast: { description: "Send the same message to many agents (one inbox each).", type: "→ AgentMessage[]" },
+    claim: { description: "Pull pending messages from an agent's inbox (priority order).", type: "→ AgentMessage[]" },
+    ack: { description: "Mark a claimed message done so it isn't redelivered.", type: "→ { acked }" },
+    request: { description: "Dispatch and block for a correlated reply.", type: "→ { message, reply }" },
+    reply: { description: "Respond to a message; routes back to the sender.", type: "→ AgentMessage" },
+    awaitReply: { description: "Block for the reply to a message you sent.", type: "→ AgentMessage | null" },
+  }}
+/>

@@ -1,0 +1,86 @@
+---
+title: Artifacts
+description: Hand files between agents with a claim-check pattern — direct-to-storage, verified, with short-lived URLs.
+---
+
+Some things are too big for the message bus: a generated report, a dataset, a model
+output. Artifacts let agents exchange **files** without those bytes ever flowing
+through the API. This is the *claim-check* pattern — store the payload, pass a small
+reference.
+
+## Why a separate path
+
+Inline payloads (context entries, message bodies) are capped at 256 KB by default to
+keep the real-time path fast. Files are uncapped and live in object storage (S3 /
+MinIO). The split is deliberate:
+
+<Cards>
+  <Card title="Inline (≤ 256 KB)" description="Lives in Redis / the message. Low latency, real-time. Oversized writes are rejected with 413." />
+  <Card title="Artifacts (any size)" description="Direct-to-storage via presigned URL. The API never proxies the bytes." />
+</Cards>
+
+## Lifecycle
+
+<Steps>
+
+<Step>
+### Upload
+The producer uploads a file. Under the hood: the server issues a presigned PUT URL,
+the client uploads directly to storage, then the server **verifies** the object by
+size and SHA-256 before marking it `available`.
+
+```ts
+const artifact = await producer.artifacts.upload(session, {
+  name: "report.txt",
+  mimeType: "text/plain",
+  bytes: fileBytes,
+});
+// artifact.status === "available"
+```
+</Step>
+
+<Step>
+### Share a reference
+Send the artifact id over the message bus — not the bytes.
+
+```ts
+await producer.bus.dispatch(session, "consumer", "deliver_report", {
+  data: { artifactId: artifact.id },
+});
+```
+</Step>
+
+<Step>
+### Download
+The consumer reads the reference and fetches the bytes with a short-lived presigned
+GET URL.
+
+```ts
+const meta = await consumer.artifacts.getMetadata(session, artifactId);
+const bytes = await consumer.artifacts.download(session, artifactId);
+```
+</Step>
+
+</Steps>
+
+## Integrity & isolation
+
+- **Verified on completion** — the server confirms the uploaded object's size and
+  SHA-256 match what was declared; a mismatch never reaches `available`.
+- **Session-scoped** — an artifact is only visible inside the session that created it.
+  Requesting it from another session returns `404`, even with a valid key.
+- **Short-lived URLs** — download URLs are presigned and expire (default ~5 min), so a
+  leaked URL isn't a durable credential.
+
+<Callout type="info">
+  The 256 KB inline cap is your routing signal: if a `context.write` or `dispatch`
+  returns `413 PAYLOAD_TOO_LARGE`, store the data as an artifact and pass its id.
+</Callout>
+
+## Retention
+
+Artifacts can carry a retention policy; a background job reclaims expired objects and
+their metadata. Set `SPANOAI_MAX_ARTIFACT_BYTES` as a soft cost cap (0 = unlimited).
+
+See the [artifact-share recipe](/docs/cookbook/artifact-share) for an end-to-end,
+byte-verified example.

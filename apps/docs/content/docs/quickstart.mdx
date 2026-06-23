@@ -1,0 +1,151 @@
+---
+title: Quickstart
+description: Run the stack and write your first multi-agent program in a few minutes.
+---
+
+This guide gets a SpanoAI server running locally and walks through a tiny program
+where two agents share state and pass a message.
+
+## Prerequisites
+
+SpanoAI needs three backends — Redis (live state + queues), Postgres (audit log +
+metadata), and an S3-compatible store (MinIO for local dev). A `docker-compose.yml`
+brings them all up.
+
+<Steps>
+
+<Step>
+
+### Start the backends
+
+```bash
+docker compose up -d
+```
+
+This starts Redis, Postgres, and MinIO with sane defaults.
+
+</Step>
+
+<Step>
+
+### Run migrations and start the server
+
+```bash
+bun run db:migrate          # from the repo root
+bun run --filter @spanoai/server dev
+```
+
+The API now listens on `http://localhost:8000`. Check it:
+
+```bash
+curl http://localhost:8000/health
+```
+
+</Step>
+
+<Step>
+
+### Create an account and an API key
+
+API access is scoped to a **tenant** and authenticated with a **key**. You get both by
+signing up — pick whichever path fits.
+
+**Dashboard (recommended).** Run the web app, sign up, and mint a key from the
+**API Keys** page:
+
+```bash
+bun run --filter @spanoai/web dev   # http://localhost:3000
+```
+
+Signing up provisions your tenant; the **API Keys** page issues scoped keys and shows
+each one **once**. This is the same flow your own users would follow.
+
+**CLI (scripted/dev).** Mint a tenant + key straight from the engine — prints
+`{ "apiKey", "tenantId" }`:
+
+```bash
+bun run apps/server/scripts/admin-key.ts mint acme
+```
+
+Either way you can also sign up over HTTP, which returns a session token plus a
+tenant, then create a key with that token:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "dev@acme.test", "password": "supersecret", "orgName": "Acme" }' \
+  | jq -r .token)
+
+curl -s -X POST http://localhost:8000/keys \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{ "name": "local-dev" }'        # → { "id", "key": "spanoai_sk_…", "scopes" }
+```
+
+<Callout type="warn">
+  The secret half of a key is shown **once**, at creation. Store it somewhere safe —
+  it is hashed (argon2) server-side and can't be recovered.
+</Callout>
+
+</Step>
+
+<Step>
+
+### Install the SDK
+
+```bash
+bun add @spanoai/sdk
+```
+
+</Step>
+
+</Steps>
+
+## Your first program
+
+Two agents — a `planner` and a `researcher` — share a plan and exchange a request.
+
+```ts title="hello-spano.ts"
+import { SpanoAIClient } from "@spanoai/sdk";
+
+const apiKey = process.env.SPANOAI_KEY!;
+const session = "run-1";
+
+// Each agent is its own client with its own identity.
+const planner = new SpanoAIClient({ baseUrl: "http://localhost:8000", apiKey, agent: "planner" });
+const researcher = new SpanoAIClient({ baseUrl: "http://localhost:8000", apiKey, agent: "researcher" });
+
+await planner.sessions.create({ sessionId: session });
+
+// 1. Share state any agent in the session can read.
+await planner.context.write(session, "shared", "plan", { steps: ["research", "write"] });
+
+// 2. Ask the researcher for something and block for the reply.
+const ask = planner.bus.request(session, "researcher", "find_revenue", { data: { ticker: "ACME" } }, { timeoutMs: 5000 });
+
+// 3. The researcher claims the request and replies.
+const inbox = await researcher.bus.claim(session, "researcher");
+await researcher.bus.reply(session, inbox[0].id, { data: { revenue: "$4.2M" } });
+
+const { reply } = await ask;
+console.log(reply?.payload.data); // { revenue: "$4.2M" }
+```
+
+Run it:
+
+```bash
+SPANOAI_KEY=spanoai_sk_... bun run hello-spano.ts
+```
+
+## What just happened
+
+<Cards>
+  <Card title="Shared memory" href="/docs/concepts/context-store" description="context.write put a value under shared.plan — readable by any agent in the session, versioned and audited." />
+  <Card title="Request / reply" href="/docs/concepts/message-bus" description="bus.request dispatched a durable message and blocked for a correlated reply; the researcher claimed and replied." />
+</Cards>
+
+## Next steps
+
+<Cards>
+  <Card title="Authentication" href="/docs/authentication" description="Scopes, namespace allowlists, and WebSocket tickets." />
+  <Card title="Cookbook" href="/docs/cookbook" description="Four runnable apps that exercise the full product." />
+</Cards>

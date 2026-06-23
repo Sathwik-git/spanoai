@@ -1,0 +1,10 @@
+{
+  "title": "Cookbook",
+  "pages": [
+    "index",
+    "parallel-research",
+    "coding-team",
+    "broadcast-fanout",
+    "artifact-share"
+  ]
+}

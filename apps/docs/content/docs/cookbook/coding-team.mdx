@@ -1,0 +1,52 @@
+---
+title: Coding Team
+description: Blocking handoff with awaitKey, then a correlated request/reply for a review verdict.
+---
+
+A coder writes its patch into shared context. A reviewer **blocks** on that key (no
+busy-polling) until it appears, reads the diff, and then the coder asks the reviewer
+for a verdict via correlated `request`/`reply`.
+
+**Proves:** `awaitKey` as a single-producer handoff (the waiter unblocks the instant
+the key is written), and request/reply correlation between two agents.
+
+```ts title="examples/coding-team/index.ts"
+import { SpanoAIClient } from "@spanoai/sdk";
+
+const session = "pr-1234";
+const coder = new SpanoAIClient({ baseUrl, apiKey, agent: "coder" });
+const reviewer = new SpanoAIClient({ baseUrl, apiKey, agent: "reviewer" });
+await coder.sessions.create({ sessionId: session });
+
+// Reviewer blocks on the coder's output BEFORE it exists (no busy-polling).
+const awaitPatch = reviewer.context.awaitKey(session, "coder", "patch", { timeoutMs: 5000 });
+
+// Coder finishes a bit later and publishes its patch.
+setTimeout(() => {
+  void coder.context.write(session, "coder", "patch", { diff: "--- a/x\n+++ b/x\n+ fix" });
+}, 150);
+
+const patch = await awaitPatch;
+assert(patch !== null);                  // reviewer unblocked on publish
+assert(patch.value.type === "json");     // reviewer sees the diff
+
+// The coder asks the reviewer for a verdict and blocks for the reply.
+const ask = coder.bus.request(session, "reviewer", "review_request", { data: { pr: 1234 } }, { timeoutMs: 5000 });
+
+// Reviewer claims the request and replies with its verdict.
+setTimeout(async () => {
+  const inbox = await reviewer.bus.claim(session, "reviewer");
+  await reviewer.bus.reply(session, inbox[0].id, { data: { approved: true, comments: "LGTM" } });
+}, 150);
+
+const { reply } = await ask;
+assert(reply !== null);                            // coder received the verdict
+assert(reply.payload.data.approved === true);      // verdict is approved
+```
+
+## What it demonstrates
+
+<Cards>
+  <Card title="awaitKey handoff" href="/docs/concepts/context-store#awaitkey--block-until-a-key-appears" description="The reviewer subscribes before the key exists and unblocks the moment it's written — lost-wakeup-safe, no polling loop." />
+  <Card title="Correlated request/reply" href="/docs/concepts/message-bus#request--reply" description="request() blocks for a reply routed back by the original message id; the coder never drains an inbox." />
+</Cards>

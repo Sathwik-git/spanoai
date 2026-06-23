@@ -1,0 +1,114 @@
+---
+title: TypeScript SDK
+description: The @spanoai/sdk client — context, bus, sessions, artifacts, and the live stream.
+---
+
+The SDK is a thin, typed wrapper over the HTTP + WebSocket API with retries, reconnect,
+and idempotent operations built in.
+
+```bash
+bun add @spanoai/sdk
+```
+
+## Client
+
+```ts
+import { SpanoAIClient } from "@spanoai/sdk";
+
+const client = new SpanoAIClient({
+  baseUrl: "http://localhost:8000",
+  apiKey: process.env.SPANOAI_KEY!,
+  agent: "planner", // identity sent on every request
+});
+```
+
+Every method below is reachable as `client.context.*`, `client.bus.*`,
+`client.sessions.*`, or `client.artifacts.*`.
+
+## context
+
+<TypeTable
+  type={{
+    write: { description: "Write a value at namespace.key. opts: { expectedVersion, operationId }.", type: "(session, ns, key, value, opts?)" },
+    read: { description: "Read an entry; resolves null if the key doesn't exist.", type: "(session, ns, key) → Entry | null" },
+    append: { description: "Atomically append items to a list (no lost updates).", type: "(session, ns, key, items[], opts?)" },
+    increment: { description: "Atomically add to a numeric counter.", type: "(session, ns, key, by, opts?)" },
+    awaitKey: { description: "Block until the key appears; null on timeout.", type: "(session, ns, key, { timeoutMs }) → Entry | null" },
+    search: { description: "Semantic search across the session's entries.", type: "(session, query, { topK }) → Hit[]" },
+    history: { description: "All versions of an entry, newest first.", type: "(session, ns, key) → Entry[]" },
+    list: { description: "List entries, optionally filtered by namespace.", type: "(session, namespace?) → Entry[]" },
+  }}
+/>
+
+## bus
+
+<TypeTable
+  type={{
+    dispatch: { description: "Send one durable message. opts: { priority, timeoutMs, maxRetries, operationId }.", type: "(session, toAgent, intent, payload, opts?) → AgentMessage" },
+    broadcast: { description: "Send the same message to many agents (one inbox each).", type: "(session, toAgents[], intent, payload, opts?) → AgentMessage[]" },
+    claim: { description: "Pull pending messages from an agent's inbox.", type: "(session, agentId, count?) → AgentMessage[]" },
+    ack: { description: "Mark a claimed message done.", type: "(session, messageId) → { acked }" },
+    reply: { description: "Reply to a message; routes back to the sender.", type: "(session, messageId, payload, opts?) → AgentMessage" },
+    request: { description: "Dispatch and block for the correlated reply.", type: "(session, toAgent, intent, payload, { timeoutMs }) → { message, reply }" },
+    awaitReply: { description: "Block for the reply to a message you sent.", type: "(session, messageId, { timeoutMs }) → AgentMessage | null" },
+    listDlq: { description: "List dead-lettered messages for the session.", type: "(session, count?) → DlqEntry[]" },
+    replayDlq: { description: "Re-inject a dead-lettered message for delivery.", type: "(session, streamId) → AgentMessage" },
+  }}
+/>
+
+<Callout type="info">
+  `payload` is `{ text?: string; data?: unknown }`. The SDK attaches a stable
+  `operationId` to writes and dispatches so a retried call is applied once.
+</Callout>
+
+## sessions
+
+<TypeTable
+  type={{
+    create: { description: "Create a session. { sessionId?, ttlSeconds?, metadata? }.", type: "(opts?) → Session" },
+    get: { description: "Fetch a session by id.", type: "(sessionId) → Session" },
+    list: { description: "List sessions for the tenant.", type: "() → Session[]" },
+    join: { description: "Add an agent to a session's membership.", type: "(sessionId, agentId?) → Session" },
+    leave: { description: "Remove an agent from membership.", type: "(sessionId, agentId?) → { left }" },
+  }}
+/>
+
+## artifacts
+
+<TypeTable
+  type={{
+    upload: { description: "Upload a file (direct-to-storage, verified). Returns when available.", type: "(session, { name, mimeType, bytes }) → Artifact" },
+    getMetadata: { description: "Read artifact metadata (status, sizeBytes, …).", type: "(session, artifactId) → Artifact" },
+    download: { description: "Download the bytes via a short-lived URL.", type: "(session, artifactId) → Uint8Array" },
+  }}
+/>
+
+## stream
+
+```ts
+const stream = await client.stream(session, (event) => {
+  // event.type is "message" | "context" | …
+  console.log(event);
+});
+// later: stream.close();
+```
+
+`stream()` mints a single-use [WebSocket ticket](/docs/authentication#websocket-tickets),
+connects, and transparently reconnects with gap recovery so you don't miss events
+across a blip.
+
+## Errors
+
+Failed requests throw `SpanoAIError` with `status`, `code`, and `requestId`:
+
+```ts
+import { SpanoAIError } from "@spanoai/sdk";
+
+try {
+  await client.context.write(session, "secrets", "k", { v: 1 });
+} catch (e) {
+  if (e instanceof SpanoAIError && e.status === 403) {
+    // key lacks scope or the namespace isn't on its allowlist
+  }
+}
+```

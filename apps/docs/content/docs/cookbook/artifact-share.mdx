@@ -1,0 +1,58 @@
+---
+title: Artifact Share
+description: Upload a file, hand the reference over a message, download it byte-for-byte.
+---
+
+A producer uploads a file (direct-to-storage, verified by size + SHA-256). It hands the
+artifact reference to a consumer over a message. The consumer downloads the bytes with
+a short-lived URL and checks they match exactly.
+
+**Proves:** the full artifact lifecycle between agents (upload → reference → download),
+the claim-check handoff over the message bus, and session-scoped isolation.
+
+```ts title="examples/artifact-share/index.ts"
+import { SpanoAIClient } from "@spanoai/sdk";
+
+const session = "report-run";
+const producer = new SpanoAIClient({ baseUrl, apiKey, agent: "producer" });
+const consumer = new SpanoAIClient({ baseUrl, apiKey, agent: "consumer" });
+await producer.sessions.create({ sessionId: session });
+
+const original = new TextEncoder().encode("DUE DILIGENCE REPORT\n…");
+
+// Producer uploads (direct-to-storage; server verifies size + SHA-256).
+const artifact = await producer.artifacts.upload(session, {
+  name: "report.txt",
+  mimeType: "text/plain",
+  bytes: original,
+});
+assert(artifact.status === "available");
+
+// Hand the reference — not the bytes — to the consumer.
+await producer.bus.dispatch(session, "consumer", "deliver_report", {
+  data: { artifactId: artifact.id },
+});
+
+// Consumer claims the message and downloads the file.
+const inbox = await consumer.bus.claim(session, "consumer");
+const artifactId = inbox[0].payload.data.artifactId;
+
+const meta = await consumer.artifacts.getMetadata(session, artifactId);
+assert(meta.status === "available" && meta.sizeBytes === original.length);
+
+const fetched = await consumer.artifacts.download(session, artifactId);
+assert(Buffer.from(fetched).equals(Buffer.from(original))); // byte-exact
+
+// A different session can't see the artifact.
+let denied = false;
+try { await consumer.artifacts.getMetadata("some-other-session", artifactId); }
+catch { denied = true; }
+assert(denied);
+```
+
+## What it demonstrates
+
+<Cards>
+  <Card title="Claim-check handoff" href="/docs/concepts/artifacts" description="The file goes to object storage; only a small reference travels over the bus. The API never proxies the bytes." />
+  <Card title="Verified + isolated" href="/docs/concepts/artifacts#integrity--isolation" description="The upload is confirmed by size + SHA-256 before going available, and the artifact is invisible outside its session." />
+</Cards>

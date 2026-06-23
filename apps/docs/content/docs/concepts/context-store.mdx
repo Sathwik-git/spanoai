@@ -1,0 +1,116 @@
+---
+title: Context Store
+description: A shared, versioned key/value memory for agents — atomic, conflict-aware, and searchable.
+---
+
+The Context Store is the shared memory of a session. Agents write entries under a
+`namespace.key` path; any agent in the same session can read them. Every write is
+versioned and audited.
+
+## Addressing
+
+An entry is identified by `(session, namespace, key)`. Namespaces are a soft
+convention for grouping — e.g. `shared`, per-agent (`planner`, `researcher`), or
+domain (`findings`). Keys are free-form within `^[A-Za-z0-9_.\-]{1,256}$`.
+
+```ts
+await client.context.write(session, "shared", "plan", { steps: ["a", "b"] });
+const entry = await client.context.read(session, "shared", "plan");
+// entry.value.type === "json"; entry.value.data === { steps: ["a","b"] }
+// read() returns null when the key doesn't exist (not an error)
+```
+
+Values are typed: text or JSON. A read returns the value plus metadata (version,
+author, timestamp). Reading a missing key returns `null`.
+
+## Versioning & compare-and-set
+
+Every write bumps a monotonic `version`. To make a conditional update safe against
+concurrent writers, pass `expectedVersion` — the write fails with a conflict if the
+current version differs (optimistic concurrency / CAS):
+
+```ts
+const cur = await client.context.read(session, "shared", "counter");
+await client.context.write(session, "shared", "counter",
+  { n: (cur?.value.data.n ?? 0) + 1 },
+  { expectedVersion: cur?.version },
+);
+```
+
+<Callout type="info">
+  The version is injected into the stored JSON verbatim — values are byte-exact on
+  read (empty arrays stay `[]`, large numbers keep full precision). No re-encoding.
+</Callout>
+
+## Atomic append & increment
+
+For the common "many writers, one list/counter" case, use `append` and `increment`.
+They run as atomic server-side operations, so **concurrent updates never clobber each
+other** — no read-modify-write race.
+
+<Tabs items={["append", "increment"]}>
+
+<Tab value="append">
+
+```ts
+// Five agents can run this concurrently; all five items land.
+await client.context.append(session, "shared", "findings", [
+  { area: "markets", summary: "…", confidence: 0.8 },
+]);
+```
+
+</Tab>
+
+<Tab value="increment">
+
+```ts
+// Atomic counter — safe under concurrency.
+await client.context.increment(session, "metrics", "tokens_used", 1240);
+```
+
+</Tab>
+
+</Tabs>
+
+Both accept an `operationId` so a retried call is applied **once**.
+
+## awaitKey — block until a key appears
+
+Instead of polling, an agent can block until another agent publishes a key. This is a
+clean single-producer handoff or barrier:
+
+```ts
+// Reviewer blocks BEFORE the coder has written anything.
+const patch = await client.context.awaitKey(session, "coder", "patch", { timeoutMs: 5000 });
+// resolves the instant coder.patch is written, or null on timeout
+```
+
+`awaitKey` is **lost-wakeup-safe**: it subscribes before its first read and falls back
+to polling, so it can't miss a write that lands in the gap.
+
+## Semantic search
+
+When an embedder is configured, entries are embedded on write and you can query by
+meaning rather than exact key:
+
+```ts
+const hits = await client.context.search(session, "quarterly revenue figures", { topK: 5 });
+```
+
+Search is backed by pgvector (cosine similarity). The embedder is injectable; a hash
+embedder ships for dev/tests so search works with no external model.
+
+## History
+
+Every version of an entry is retained and queryable:
+
+```ts
+const versions = await client.context.history(session, "shared", "plan");
+```
+
+## Size limits
+
+Inline values are capped (default **256 KB**, `SPANOAI_MAX_INLINE_BYTES`). Oversized
+writes return `413 PAYLOAD_TOO_LARGE` — that's your signal to store the data as an
+[artifact](/docs/concepts/artifacts) and share a reference instead. This keeps the
+real-time path fast.

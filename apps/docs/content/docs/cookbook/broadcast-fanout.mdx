@@ -1,0 +1,54 @@
+---
+title: Broadcast Fan-out
+description: One send → many durable inboxes, then collect every reply by message id.
+---
+
+A coordinator broadcasts the **same** task to several workers in one call. Each worker
+claims its own durable copy and replies. The coordinator then collects every reply by
+long-polling each sent message id with `awaitReply`.
+
+**Proves:** multi-recipient messaging (one call → one durable inbox per recipient, all
+sharing a single `traceId`) and reply correlation after a fan-out.
+
+```ts title="examples/broadcast-fanout/index.ts"
+import { SpanoAIClient } from "@spanoai/sdk";
+
+const WORKERS = ["worker-1", "worker-2", "worker-3"];
+const session = "batch-job-7";
+
+const coordinator = new SpanoAIClient({ baseUrl, apiKey, agent: "coordinator" });
+await coordinator.sessions.create({ sessionId: session });
+
+// One call → one durable message per worker, all sharing one traceId.
+const sent = await coordinator.bus.broadcast(session, WORKERS, "process_chunk", { data: { chunk: "abc" } });
+assert(sent.length === WORKERS.length);
+assert(new Set(sent.map((m) => m.traceId)).size === 1);
+
+// Each worker claims its own copy and replies.
+for (const name of WORKERS) {
+  const worker = new SpanoAIClient({ baseUrl, apiKey, agent: name });
+  const inbox = await worker.bus.claim(session, name);
+  assert(inbox.some((m) => m.intent === "process_chunk"));
+  await worker.bus.reply(session, inbox[0].id, { data: { worker: name, result: "done" } });
+}
+
+// Coordinator collects every reply, correlated to the messages it sent.
+const replies = await Promise.all(
+  sent.map((m) => coordinator.bus.awaitReply(session, m.id, { timeoutMs: 4000 })),
+);
+assert(replies.filter(Boolean).length === WORKERS.length);
+assert(replies.every((r) => r?.payload.data.result === "done"));
+```
+
+## What it demonstrates
+
+<Cards>
+  <Card title="Multi-recipient send" href="/docs/concepts/message-bus#broadcast-fan-out" description="broadcast() creates one durable inbox entry per recipient (deduped), all tagged with a shared traceId for correlation." />
+  <Card title="Collect after fan-out" href="/docs/concepts/message-bus#broadcast-fan-out" description="awaitReply lets the coordinator gather each worker's response by the id of the message it sent — the standalone form of request()'s wait." />
+</Cards>
+
+<Callout type="info">
+  This recipe is what motivated adding `bus.awaitReply` to the SDK and a
+  `GET /messages/:id/await-reply` route to the API — `request()` only awaits its own
+  send, so collecting replies after a broadcast needs the standalone wait.
+</Callout>

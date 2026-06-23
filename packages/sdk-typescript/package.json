@@ -1,0 +1,44 @@
+{
+  "name": "@spanoai/sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "TypeScript SDK for the SpanoAI shared-memory API + message bus",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Sathwik-git/spanoai.git",
+    "directory": "packages/sdk-typescript"
+  },
+  "keywords": ["spanoai", "agents", "memory", "message-bus", "multi-agent", "llm"],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": ["dist", "src", "README.md"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "bun run build",
+    "clean": "rm -rf dist .turbo"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "tsup": "^8.3.0"
+  }
+}

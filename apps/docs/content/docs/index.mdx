@@ -1,0 +1,70 @@
+---
+title: Introduction
+description: A shared context store, message bus, and audit log for multi-agent systems.
+---
+
+As systems move from single agents to networks of specialised agents, they need a
+reliable communication substrate — a shared context bus where agents post
+observations, subscribe to relevant state, and coordinate without stepping on each
+other. SpanoAI is that substrate: **like Kafka, but purpose-built for agent-to-agent
+communication**, with built-in conflict resolution, priority queuing, and audit
+trails.
+
+## The problem
+
+Multi-agent frameworks give you ways to *call* agents. They don't give you a
+standard way to **pass context, share memory, or coordinate state**. Every team
+reinvents this from scratch — usually as a pile of shared dictionaries, ad-hoc
+queues, and hope.
+
+SpanoAI provides one coordination layer with three pillars:
+
+<Cards>
+  <Card title="Context Store" href="/docs/concepts/context-store" description="A shared, versioned key/value memory. Atomic append & increment, compare-and-set, blocking awaitKey, semantic search." />
+  <Card title="Message Bus" href="/docs/concepts/message-bus" description="Durable agent-to-agent messaging: claim/ack, request/reply, broadcast fan-out, priorities, and a dead-letter queue." />
+  <Card title="Audit Log" href="/docs/concepts/sessions" description="Every write and message recorded durably in Postgres — a replayable, queryable trail of who did what, when." />
+  <Card title="Artifacts" href="/docs/concepts/artifacts" description="Hand files between agents with a claim-check pattern: direct-to-storage, verified, with short-lived URLs." />
+</Cards>
+
+## How it fits together
+
+```text
+            ┌─────────────────────────────────────────────┐
+   agent A  │                  SpanoAI                     │  agent B
+  ───────►  │                                              │  ◄───────
+            │   Context Store   Message Bus   Audit Log    │
+            │     (Redis)      (Redis Streams)  (Postgres) │
+            │         │             │              │       │
+            │         └──── Artifacts (S3/MinIO) ──┘       │
+            └─────────────────────────────────────────────┘
+```
+
+- **Redis** holds live state and message queues (atomic Lua for writes, Streams for
+  at-least-once delivery).
+- **Postgres** holds the durable audit log and artifact metadata.
+- **Object storage** (S3 / MinIO) holds artifact bytes; large data never travels
+  through the API.
+
+Agents talk to SpanoAI over a small HTTP + WebSocket API, or through the
+[TypeScript SDK](/docs/api/sdk).
+
+## Core ideas
+
+<Cards>
+  <Card title="Sessions scope everything" description="Context entries and messages live inside a session (a run). Isolation is automatic — agents in different sessions never see each other's state." />
+  <Card title="At-least-once + idempotency" description="Messages are delivered at least once; a stable operationId lets consumers dedupe a redelivered message." />
+  <Card title="No lost updates" description="Concurrent append and increment are atomic. Five agents appending to one list never clobber each other." />
+  <Card title="Claim-check for files" description="Inline payloads are capped (256 KB by default); anything bigger goes to object storage and travels as a reference." />
+</Cards>
+
+## Next steps
+
+<Cards>
+  <Card title="Quickstart" href="/docs/quickstart" description="Run the stack and write your first multi-agent program in a few minutes." />
+  <Card title="Cookbook" href="/docs/cookbook" description="Runnable example apps: parallel research, a coding team, broadcast fan-out, and file handoff." />
+</Cards>
+
+<Callout type="info">
+  SpanoAI is backend-agnostic at the interface level, but ships with Redis +
+  Postgres + S3/MinIO adapters out of the box.
+</Callout>

@@ -1,0 +1,67 @@
+---
+title: Use SpanoAI from your agent framework
+description: Three ways to plug SpanoAI's shared memory and message bus into any agent stack — MCP, framework tools, or direct SDK / middleware.
+---
+
+SpanoAI is a *distribution layer* over a single engine: whatever framework your
+agents run in, they reach the same context store and message bus. There are
+three shapes, and you can mix them.
+
+## The three shapes
+
+| Shape | Who decides to call it | Best for |
+|---|---|---|
+| **MCP server** | the LLM (it's a tool) | Claude Desktop, Cursor, the Claude Agent SDK, Google ADK — zero glue |
+| **Framework tools** | the LLM (it's a tool) | giving an agent `recall` / `share` / `handoff` verbs |
+| **Direct SDK / middleware** | your code | auto-injecting memory, or orchestration that must not depend on the LLM choosing to act |
+
+The **context store** fits all three. The **message bus** (`send` / `claim` /
+`reply` / `request` / `await`) is exposed as tools or called directly — agent
+coordination shouldn't hinge on the model deciding to wait.
+
+## Fastest path: MCP
+
+One command gives any MCP client every SpanoAI operation as a tool:
+
+```bash
+SPANOAI_API_KEY=sk_... SPANOAI_SESSION=run-1 npx @spanoai/mcp
+```
+
+See **[MCP server](./mcp)** for client config (Claude Desktop, Cursor, ADK) and
+the full tool list.
+
+## From code
+
+TypeScript:
+
+```bash
+npm i @spanoai/sdk
+```
+
+```ts
+import { SpanoAIClient } from "@spanoai/sdk";
+const spano = new SpanoAIClient({ baseUrl: "http://localhost:8000", apiKey, agent: "planner" });
+await spano.context.write("run-1", "planner", "goal", { task: "ship it" });
+```
+
+Python:
+
+```bash
+pip install spanoai
+```
+
+```python
+from spanoai import SpanoAI
+spano = SpanoAI(api_key="sk_...", agent="planner")
+spano.context.write("run-1", "planner", "goal", {"task": "ship it"})
+```
+
+See the **[TypeScript SDK](../api/sdk)** and **[Python SDK](./python-sdk)**
+references.
+
+## What makes this different
+
+Memory products give agents `add → search → recall`. SpanoAI adds a **durable
+message bus**, so integrations expose verbs other memory layers can't:
+`handoff`, `request`, `await` — agent-to-agent coordination, idempotent and
+replayable.

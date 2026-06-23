@@ -1,0 +1,58 @@
+---
+title: Parallel Research
+description: Fan-out + accumulate + a client-side barrier — concurrent appends never lose data.
+---
+
+Five researcher agents work **concurrently**, each appending its finding to one shared
+list. A lead agent waits on a barrier until all five have reported, then reads the
+consolidated result.
+
+**Proves:** atomic `context.append` under concurrency — no finding is lost despite five
+simultaneous writers racing on the same key.
+
+```ts title="examples/parallel-research/index.ts"
+import { SpanoAIClient } from "@spanoai/sdk";
+
+const AGENTS = ["climate", "policy", "markets", "tech", "legal"];
+const session = "mna-due-diligence";
+
+const lead = new SpanoAIClient({ baseUrl, apiKey, agent: "lead" });
+await lead.sessions.create({ sessionId: session });
+
+// Each researcher is its own client identity, running in parallel.
+// Atomic append means no finding is lost despite the race.
+await Promise.all(
+  AGENTS.map((name) => {
+    const agent = new SpanoAIClient({ baseUrl, apiKey, agent: `researcher-${name}` });
+    return agent.context.append(session, "shared", "findings", [
+      { area: name, summary: `finding from ${name}`, confidence: 0.8 },
+    ]);
+  }),
+);
+
+// The lead waits (barrier) until all five findings are in, then reads.
+let findings: unknown[] = [];
+const deadline = Date.now() + 5000;
+while (Date.now() < deadline) {
+  const entry = await lead.context.read(session, "shared", "findings");
+  findings = entry?.value.type === "json" ? (entry.value.data as unknown[]) : [];
+  if (findings.length >= AGENTS.length) break;
+  await new Promise((r) => setTimeout(r, 50));
+}
+
+assert(findings.length === 5);            // no lost updates
+assert(new Set(findings.map((f) => f.area)).size === 5); // every area present
+```
+
+## What it demonstrates
+
+<Cards>
+  <Card title="No lost updates" description="append is an atomic server-side operation. A naive read-modify-write would drop findings under this race; here all five survive." />
+  <Card title="Client-side barrier" description="The lead polls read() until the list reaches the expected size — a simple, robust join over shared context." />
+</Cards>
+
+<Callout type="info">
+  The barrier here polls `read()`. For a single-producer handoff you'd use
+  [`awaitKey`](/docs/concepts/context-store#awaitkey--block-until-a-key-appears)
+  instead — see the [Coding Team](/docs/cookbook/coding-team) recipe.
+</Callout>

@@ -1,0 +1,119 @@
+---
+title: Authentication
+description: API keys, scopes, namespace allowlists, and WebSocket tickets.
+---
+
+Every request to SpanoAI is authenticated with an **API key** and carries an **agent
+identity**. Keys are scoped to a tenant and grant a specific set of permissions.
+
+## API keys
+
+A key looks like `spanoai_sk_<keyId>_<secret>`. The server stores only an argon2 hash
+of the secret (with a cached fast verifier), so a leaked database never exposes usable
+keys. The secret is returned **once**, at creation.
+
+### Creating a key
+
+Keys are minted by a **logged-in user** (a human), never by another API key. Sign up
+once to provision a tenant, then create keys:
+
+- **Dashboard** — sign up at the web app, open **API Keys**, and click *Create key*.
+  The full key is shown once.
+- **HTTP** — `POST /auth/signup` (or `/auth/login`) returns a session token; use it as
+  `Authorization: Bearer <token>` to call `POST /keys`.
+- **CLI** — `bun run apps/server/scripts/admin-key.ts mint <name>` mints a tenant + key
+  directly via the engine (dev / scripting).
+
+```bash
+# 1. Get a session token
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "dev@acme.test", "password": "supersecret" }' | jq -r .token)
+
+# 2. Mint a scoped key (omit "scopes" to grant all)
+curl -s -X POST http://localhost:8000/keys \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{ "name": "production-mcp", "scopes": ["context:read", "context:write"] }'
+```
+
+<Callout type="info">
+  The dashboard authenticates with the **session token** (`Authorization: Bearer …`),
+  not an API key — so it can list and revoke keys. API keys are for your agents (SDK /
+  MCP). Both resolve to the same tenant.
+</Callout>
+
+Send it on every request via the `X-SpanoAI-Key` header, and identify the calling
+agent with `X-SpanoAI-Agent`:
+
+```bash
+curl http://localhost:8000/context/run-1/shared/plan \
+  -H "X-SpanoAI-Key: spanoai_sk_abc_def..." \
+  -H "X-SpanoAI-Agent: planner"
+```
+
+With the SDK these are set once on the client:
+
+```ts
+const client = new SpanoAIClient({
+  baseUrl: "http://localhost:8000",
+  apiKey: process.env.SPANOAI_KEY!,
+  agent: "planner",
+});
+```
+
+## Scopes
+
+Keys carry scopes; a request is rejected with `403 FORBIDDEN` if the key lacks the
+scope for the operation.
+
+<TypeTable
+  type={{
+    "context:read": { description: "Read context entries, history, search, list.", type: "scope" },
+    "context:write": { description: "Write / append / increment context entries.", type: "scope" },
+    "message:send": { description: "Dispatch, broadcast, request, reply.", type: "scope" },
+    "message:read": { description: "Claim, ack, read the DLQ.", type: "scope" },
+    "artifact:write": { description: "Upload artifacts.", type: "scope" },
+    "artifact:read": { description: "Read artifact metadata and download.", type: "scope" },
+    "session:manage": { description: "Create, join, leave, end sessions.", type: "scope" },
+  }}
+/>
+
+<Callout type="info">
+  Grant the narrowest set that an agent needs. A read-only observer agent should hold
+  only `context:read` and `message:read`.
+</Callout>
+
+## Namespace allowlists
+
+Beyond scopes, a key can be restricted to a set of **context namespaces**. If a key's
+allowlist is `["shared", "planner"]`, any attempt to write `secrets.api_key` is
+rejected — even with `context:write`. This lets you hand a key to an untrusted agent
+and still bound the blast radius.
+
+A namespace is also sanitised: agent ids and namespaces must match
+`^[A-Za-z0-9_.\-]{1,256}$`, so they can't be used to corrupt internal key layouts.
+
+## WebSocket tickets
+
+The live stream (`/stream`) is authenticated with a **single-use ticket** rather than
+a key in the URL (which would leak into logs and browser history). Mint a ticket with
+your key, then connect with it:
+
+```ts
+// 1. POST /stream-ticket { sessionId }  → { ticket, expiresIn } (valid ~30s, single use)
+// 2. connect to  /stream/<sessionId>?ticket=<ticket>
+```
+
+The SDK's `stream()` does this for you — it mints a ticket and opens the socket
+transparently.
+
+<Callout type="warn">
+  Tickets are consumed on first use (`GETDEL`) and expire in 30 seconds. Mint a fresh
+  one per connection; never reuse.
+</Callout>
+
+## Multi-tenancy
+
+Every key belongs to exactly one tenant, and `tenantId` is an explicit dimension on
+every stored key, stream, and audit row. A key from tenant A can never read tenant B's
+sessions — isolation is enforced at the storage layer, not just the API.
