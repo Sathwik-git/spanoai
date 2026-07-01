@@ -17,12 +17,21 @@ export const metadata: Metadata = {
     title: "SpanoAI",
     description:
       "Shared memory and a message bus for multi-agent systems — context store, message bus, and audit log.",
+    images: [
+      {
+        url: "/opengraph-image",
+        width: 1200,
+        height: 630,
+        alt: "SpanoAI logo and brand card",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "SpanoAI",
     description:
       "Shared memory and a message bus for multi-agent systems.",
+    images: ["/opengraph-image"],
   },
 };
 
