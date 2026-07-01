@@ -25,10 +25,18 @@ export default function GlobalNotFound() {
           >
             404
           </p>
-          <h1 style={{ margin: "0.75rem 0 0", fontSize: "clamp(2rem, 5vw, 4rem)", lineHeight: 1.05 }}>
+          <h1
+            style={{
+              margin: "0.75rem 0 0",
+              fontSize: "clamp(2rem, 5vw, 4rem)",
+              lineHeight: 1.05,
+            }}
+          >
             Page not found
           </h1>
-          <p style={{ margin: "1rem 0 0", maxWidth: "32rem", color: "#cbd5e1" }}>
+          <p
+            style={{ margin: "1rem 0 0", maxWidth: "32rem", color: "#cbd5e1" }}
+          >
             The page you requested does not exist in the SpanoAI dashboard.
           </p>
         </main>
