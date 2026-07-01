@@ -17,7 +17,7 @@ export default async function Page(props: {
   const page = source.getPage(params.slug);
   if (!page) notFound();
 
-  const MDX = page.data.body;
+  const MDX = (page.data as any).body;
 
   return (
     <DocsPage toc={page.data.toc} full={page.data.full}>
